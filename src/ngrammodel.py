@@ -39,7 +39,7 @@ class MyModel:
         Training data
         """
         training_lines = []
-        with open('training.json', 'r', encoding='utf-8') as f:
+        with open('src/training.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
 
         for token, freq in data.items():
