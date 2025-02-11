@@ -3,4 +3,4 @@ fasttext-wheel
 scikit-learn
 numpy
 urllib3
-requests
+datasets
