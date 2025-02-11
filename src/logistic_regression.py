@@ -95,75 +95,65 @@ class MyModel:
             for p in preds:
                 f.write(f"{p}\n")
 
-    def _prepare_training_samples(self, data, context_size=3):
+    def _prepare_training_samples(self, data):
         """
         Create training pairs (X, y) from input lines.
-
-        For each position in each line, X is built by concatenating the FastText 
-        embeddings for the previous `context_size` characters (with padding if needed)
-        and y is the next character.
+        X: Embedding of current character
+        y: Next character
         """
         X = []
         y = []
 
         for line in data:
-            # For each possible position that has a next character
+            # For each pair of consecutive characters
             for i in range(len(line) - 1):
-                # Get the context: up to the last context_size characters ending at position i.
-                # If i+1 < context_size, we use what is available.
-                context_chars = line[max(0, i - context_size + 1): i + 1]
+                current_char = line[i]
                 next_char = line[i + 1]
 
-                # Get the FastText embedding for each character in the context
-                context_embeddings = [self.ft_model.get_word_vector(c) for c in context_chars]
+                # Get FastText embedding for the current character
+                current_char_vec = self.ft_model.get_word_vector(current_char)
 
-                # If we have fewer than context_size embeddings, pad at the beginning with zeros.
-                if len(context_embeddings) < context_size:
-                    pad_size = context_size - len(context_embeddings)
-                    # Assuming FastText embeddings are 300-dimensional:
-                    padding = [np.zeros(300) for _ in range(pad_size)]
-                    context_embeddings = padding + context_embeddings
-
-                # Concatenate the embeddings into a single feature vector.
-                context_embedding_flat = np.hstack(context_embeddings)
-
-                X.append(context_embedding_flat)
+                X.append(current_char_vec)
                 y.append(next_char)
 
-        # Convert lists to NumPy arrays.
+        # Convert to numpy arrays
         X = np.array(X, dtype=np.float32)
         y = np.array(y)
         return X, y
 
-
-    def run_train(self, data, work_dir, context_size=3):
+    def run_train(self, data, work_dir):
         """
-        Train a logistic regression model on the provided data using a context of
-        `context_size` previous characters.
-
-        Steps:
-        1. Ensure FastText model is available (downloads if necessary).
-        2. Load FastText model.
-        3. Prepare training samples using the context of previous characters.
-        4. Encode target characters and train logistic regression.
-        5. Save the trained model artifacts.
+        Train a logistic regression model on the provided data.
+        1. Ensures FastText model is available
+        2. Loads FastText model
+        3. Prepares training samples
+        4. Trains logistic regression
+        5. Saves model artifacts
         """
-        # 1) Ensure FastText model is available or download it.
+        # -----------------------------
+        # 1) Ensure FastText model is available or download it
+        # -----------------------------
         self.ensure_fasttext_model()
 
-        # 2) Load the FastText model.
+        # -----------------------------
+        # 2) Load the FastText model
+        # -----------------------------
         self.ft_model = fasttext.load_model(self.fasttext_model_path)
 
-        # 3) Prepare training samples using the specified context size.
+        # -----------------------------
+        # 3) Prepare training samples
+        # -----------------------------
         if not data:
             print("No training data provided. Training aborted.")
             return
-        X, y = self._prepare_training_samples(data, context_size=context_size)
+        X, y = self._prepare_training_samples(data)
         if len(X) == 0:
             print("No valid training pairs (X, y) could be constructed. Training aborted.")
             return
 
-        # 4) Encode the target characters and train logistic regression.
+        # -----------------------------
+        # 4) Train logistic regression
+        # -----------------------------
         self.label_encoder = LabelEncoder()
         y_enc = self.label_encoder.fit_transform(y)
 
@@ -175,29 +165,21 @@ class MyModel:
         self.model.fit(X, y_enc)
         print("Training complete.")
 
-        # Keep track of the known characters.
+        # Keep track of known characters
         self.known_chars = self.label_encoder.classes_
 
-        # 5) Save model artifacts.
+        # -----------------------------
+        # 5) Save model artifacts
+        # -----------------------------
         self.save(work_dir)
 
-    def run_pred(self, data, context_size=3):
+    def run_pred(self, data):
         """
-        Predict the next character for each input line using the last `context_size` characters
-        as context, and return top-3 guesses.
-
-        For each input:
-        - Extract the last `context_size` characters.
-        - For each character, get its FastText embedding.
-        - If the number of available characters is less than `context_size`,
-            pad the beginning with zeros (assuming embedding size is 300).
-        - Concatenate the embeddings into a single feature vector.
-        - Use the logistic regression model to predict probabilities over the target characters.
-        - Select the top 3 predictions.
+        Predict the next character for each input line and return top-3 guesses.
         """
         preds = []
-        # Check that the model is loaded
         if not self.model or not self.ft_model or not self.label_encoder:
+            # Fallback if model wasn't trained / loaded
             print("[WARN] Model not loaded or trained. Returning random guesses.")
             all_chars = string.ascii_letters
             for _ in data:
@@ -206,37 +188,29 @@ class MyModel:
             return preds
 
         for inp in data:
-            # If the input is empty, fallback to known characters or random selection.
+            # If input is empty, no context:
             if not inp:
+                # Return top-3 frequent characters from known set, or random fallback
                 if self.known_chars is not None:
                     preds.append(''.join(self.known_chars[:3]))
                 else:
                     preds.append(''.join(random.choices(string.ascii_letters, k=3)))
                 continue
 
-            # Extract the last `context_size` characters from the input.
-            context_chars = inp[-context_size:]
-            # Get FastText embeddings for each character in context.
-            context_embeddings = [self.ft_model.get_word_vector(c) for c in context_chars]
+            # 1) Get last character as context
+            last_char = inp[-1]
 
-            # If fewer than context_size embeddings are available, pad with zeros.
-            if len(context_embeddings) < context_size:
-                pad_size = context_size - len(context_embeddings)
-                padding = [np.zeros(300) for _ in range(pad_size)]  # assuming 300-dim embeddings
-                context_embeddings = padding + context_embeddings
+            # 2) Get its embedding
+            last_char_vec = self.ft_model.get_word_vector(last_char)
 
-            # Concatenate embeddings into a single flat feature vector.
-            feature_vector = np.hstack(context_embeddings)
+            # 3) Predict probabilities over all known classes
+            probs = self.model.predict_proba([last_char_vec])[0]
 
-            # Predict probabilities over all known target classes using the trained model.
-            probs = self.model.predict_proba([feature_vector])[0]
-
-            # Get the indices for the top 3 probabilities (in descending order).
+            # 4) Get indices of top 3
             top3_indices = np.argsort(probs)[-3:][::-1]
-            # Convert numerical indices back to characters.
             top3_chars = self.label_encoder.inverse_transform(top3_indices)
 
-            # Append the concatenated top-3 predictions.
+            # Combine as a string
             preds.append(''.join(top3_chars))
 
         return preds
