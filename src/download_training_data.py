@@ -81,6 +81,6 @@ def gather_multilingual_data(
 if __name__ == "__main__":
     gather_multilingual_data(
         languages=None,
-        num_lines_per_lang=25,
+        num_lines_per_lang=1000,
         output_file="src/training_data.txt"
     )
