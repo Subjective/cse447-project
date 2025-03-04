@@ -9,10 +9,10 @@ mkdir -p submit
 printf "Joshua Yin,joshjyin\nJohnathan Zhang,jz050701\nSirjan Singh,sirjan1" > submit/team.txt
 
 # train model
-python src/logistic_regression.py train --work_dir work
+python src/lstm.py train --work_dir work
 
 # make predictions on example data submit it in pred.txt
-python src/logistic_regression.py test --work_dir work --test_data example/input.txt --test_output submit/pred.txt
+python src/lstm.py test --work_dir work --test_data example/input.txt --test_output submit/pred.txt
 
 # submit docker file
 cp Dockerfile submit/Dockerfile
