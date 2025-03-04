@@ -4,7 +4,7 @@ import string
 import random
 import torch
 import torch.nn as nn
-import pickle
+from torch.nn.utils.rnn import pad_sequence
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 class CharLSTM(nn.Module):
@@ -14,7 +14,7 @@ class CharLSTM(nn.Module):
       - LSTM layer to process the sequence
       - Linear output layer for prediction
     """
-    def __init__(self, vocab_size, embed_dim=128, hidden_dim=128):
+    def __init__(self, vocab_size, embed_dim=256, hidden_dim=512):
         super(CharLSTM, self).__init__()
         self.embed_dim = embed_dim
         self.hidden_dim = hidden_dim
@@ -36,22 +36,15 @@ class CharLSTM(nn.Module):
         Returns:
           logits over characters, plus updated (h, c)
         """
-        # (batch_size, seq_len, embed_dim)
-        emb = self.embedding(x)
-        # output: (batch_size, seq_len, hidden_dim)
-        # hidden_out: (h, c) each of shape (1, batch_size, hidden_dim)
-        output, hidden_out = self.lstm(emb, hidden)
-        # project each timestep to vocabulary logits
-        # (batch_size, seq_len, vocab_size)
-        logits = self.fc(output)
+        emb = self.embedding(x)  # (batch_size, seq_len, embed_dim)
+        output, hidden_out = self.lstm(emb, hidden)  # output: (batch_size, seq_len, hidden_dim)
+        logits = self.fc(output)  # (batch_size, seq_len, vocab_size)
         return logits, hidden_out
-
 
 class MyModel:
     """
     Character LSTM model for next-character prediction.
     """
-
     def __init__(self):
         self.model = None
         self.vocab = None  # {char: idx}
@@ -116,7 +109,7 @@ class MyModel:
         """
         Convert a string sequence to a tensor of indices.
         """
-        indices = [self.vocab.get(ch, 0) for ch in seq]  # 0 if char not in vocab
+        indices = [self.vocab.get(ch, 0) for ch in seq]  # default to 0 if char not in vocab
         return torch.tensor(indices, dtype=torch.long)
 
     def tensor_to_sequence(self, tensor):
@@ -141,52 +134,50 @@ class MyModel:
         vocab_size = len(self.vocab)
 
         # 2) Initialize model
-        self.model = CharLSTM(vocab_size=vocab_size, embed_dim=128, hidden_dim=128).to(self.device)
+        self.model = CharLSTM(vocab_size=vocab_size, embed_dim=256, hidden_dim=512).to(self.device)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
-        criterion = nn.CrossEntropyLoss()
+        # Use ignore_index=0 to ignore padded tokens in the loss
+        criterion = nn.CrossEntropyLoss(ignore_index=0)
 
-        # 3) Prepare examples for next-char prediction
-        # Each line: we create pairs (input_seq, target_seq) for training
+        # 3) Prepare training pairs (input, target) for next-character prediction
         all_examples = []
         for line in data:
             if len(line) < 2:
                 continue
-            # Example: "hello"
-            # input: "hell", target: "ello"
+            # Example: for "hello", input is "hell", target is "ello"
             inp_seq = line[:-1]
             tgt_seq = line[1:]
             all_examples.append((inp_seq, tgt_seq))
 
-        # If no valid pairs, abort
         if not all_examples:
             print("[WARN] No valid training pairs. Aborting.")
             return
 
-        # TODO: Hyperparameter tuning to determine optimal epochs, batch_size, etc.
-        self.model.train()
+        batch_size = 32
         num_epochs = 10
+        self.model.train()
         for epoch in range(num_epochs):
             random.shuffle(all_examples)
             total_loss = 0.0
-            for inp_seq, tgt_seq in all_examples:
-                x_tensor = self.sequence_to_tensor(inp_seq).unsqueeze(0).to(self.device)
-                y_tensor = self.sequence_to_tensor(tgt_seq).to(self.device)
-                # x_tensor: shape (1, seq_len)
-                # y_tensor: shape (seq_len,)
+            # Process mini-batches
+            for i in range(0, len(all_examples), batch_size):
+                batch = all_examples[i:i+batch_size]
+                # Convert each sequence to tensor
+                input_tensors = [self.sequence_to_tensor(inp) for inp, _ in batch]
+                target_tensors = [self.sequence_to_tensor(tgt) for _, tgt in batch]
+                # Pad sequences in the batch to the same length
+                input_batch = pad_sequence(input_tensors, batch_first=True, padding_value=0).to(self.device)
+                target_batch = pad_sequence(target_tensors, batch_first=True, padding_value=0).to(self.device)
 
                 self.model.zero_grad()
-                logits, _ = self.model(x_tensor)  # (1, seq_len, vocab_size)
-
-                # We want to compare logits against y_tensor for each timestep
-                # reshape logits to (seq_len, vocab_size)
-                logits = logits.squeeze(0)  # shape (seq_len, vocab_size)
-
-                loss = criterion(logits, y_tensor)
+                logits, _ = self.model(input_batch)  # logits shape: (batch_size, seq_len, vocab_size)
+                # Flatten logits and targets for loss computation
+                logits_flat = logits.view(-1, self.model.vocab_size)
+                targets_flat = target_batch.view(-1)
+                loss = criterion(logits_flat, targets_flat)
                 loss.backward()
                 optimizer.step()
-
-                total_loss += loss.item()
-
+                total_loss += loss.item() * len(batch)
             avg_loss = total_loss / len(all_examples)
             print(f"[Epoch {epoch+1}/{num_epochs}] Loss: {avg_loss:.4f}")
 
@@ -240,7 +231,7 @@ class MyModel:
             os.makedirs(work_dir)
         checkpoint_path = os.path.join(work_dir, 'model.checkpoint')
 
-        # We'll store the entire model state plus vocab in a dict
+        # Store the entire model state plus vocab in a dict
         save_dict = {
             'model_state': self.model.state_dict() if self.model else None,
             'vocab': self.vocab,
@@ -265,17 +256,14 @@ class MyModel:
         model_instance.idx2char = checkpoint.get('idx2char', None)
 
         if model_instance.vocab:
-            # Recreate LSTM model
             vocab_size = len(model_instance.vocab)
-            model_instance.model = CharLSTM(vocab_size=vocab_size)
+            model_instance.model = CharLSTM(vocab_size=vocab_size, embed_dim=256, hidden_dim=512)
             model_instance.model.load_state_dict(checkpoint['model_state'])
-            # Move to GPU if available
             model_instance.model.to(model_instance.device)
         else:
             print("[WARN] Missing vocab in checkpoint. Model won't predict properly.")
 
         return model_instance
-
 
 if __name__ == '__main__':
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
