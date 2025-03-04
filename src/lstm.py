@@ -103,7 +103,6 @@ class MyModel:
         for line in data:
             for ch in line:
                 chars.add(ch)
-        # Optionally, include some extra chars
         extra_chars = string.ascii_letters + string.digits + string.punctuation + " "
         for ch in extra_chars:
             chars.add(ch)
