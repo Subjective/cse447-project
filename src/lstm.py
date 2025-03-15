@@ -1,10 +1,12 @@
 #!/usr/bin/env python
+import json
 import os
 import string
 import random
 import torch
 import torch.nn as nn
 import pickle
+from tqdm import tqdm
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 class CharLSTM(nn.Module):
@@ -58,20 +60,73 @@ class MyModel:
         self.idx2char = None  # reverse mapping
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # @classmethod
+    # def load_training_data(cls):
+    #     """
+    #     Load training data from data file.
+    #     """
+    #     data_file = 'src/training_data.txt'
+    #     if not os.path.exists(data_file):
+    #         print(f"[WARN] {data_file} not found. No training data loaded.")
+    #         return []
+
+    #     data = []
+    #     with open(data_file, 'r', encoding='utf-8') as f:
+    #         for line in f:
+    #             data.append(line.strip())
+    #     return data
+    # @classmethod
+    # def load_training_data(cls):
+    #     """
+    #     Load training data from all text files inside the training_Data folder.
+    #     """
+    #     data_dir = 'src/training_data'
+    #     if not os.path.exists(data_dir):
+    #         print(f"[WARN] {data_dir} not found. No training data loaded.")
+    #         return []
+
+    #     data = []
+    #     for root, _, files in os.walk(data_dir):
+    #         for file in files:
+    #             if file.endswith('.txt'):
+    #                 file_path = os.path.join(root, file)
+    #                 with open(file_path, 'r', encoding='utf-8') as f:
+    #                     for line in f:
+    #                         data.append(line.strip())
+
+    #     return data
     @classmethod
     def load_training_data(cls):
         """
-        Load training data from data file.
+        Load training data from all text files inside the training_Data folder.
+        If a file contains JSON objects (Chinese data), only extract the "text" field.
         """
-        data_file = 'src/training_data.txt'
-        if not os.path.exists(data_file):
-            print(f"[WARN] {data_file} not found. No training data loaded.")
+        data_dir = 'src/training_data'
+        if not os.path.exists(data_dir):
+            print(f"[WARN] {data_dir} not found. No training data loaded.")
             return []
 
         data = []
-        with open(data_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                data.append(line.strip())
+        for root, _, files in os.walk(data_dir):
+            for file in files:
+                if file.endswith('.txt'):
+                    file_path = os.path.join(root, file)
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        first_line = f.readline().strip()  # Read first line to check format
+                        f.seek(0)  # Reset file pointer
+
+                        if first_line.startswith('{') and first_line.endswith('}'):  # Likely JSON
+                            for line in f:
+                                try:
+                                    json_obj = json.loads(line.strip())
+                                    if "text" in json_obj:
+                                        data.append(json_obj["text"])
+                                except json.JSONDecodeError:
+                                    continue  # Skip malformed JSON lines
+                        else:
+                            for line in f:
+                                data.append(line.strip())  # Regular text file
+
         return data
 
     @classmethod
@@ -136,23 +191,22 @@ class MyModel:
             print("[WARN] No training data available. Training aborted.")
             return
 
-        # 1) Build vocab
+        # Build vocab
         self.build_vocab(data)
         vocab_size = len(self.vocab)
 
-        # 2) Initialize model
+        # Initialize model
         self.model = CharLSTM(vocab_size=vocab_size, embed_dim=128, hidden_dim=128).to(self.device)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
         criterion = nn.CrossEntropyLoss()
 
-        # 3) Prepare examples for next-char prediction
+        # Prepare examples for next-char prediction
         # Each line: we create pairs (input_seq, target_seq) for training
         all_examples = []
         for line in data:
             if len(line) < 2:
                 continue
-            # Example: "hello"
-            # input: "hell", target: "ello"
+            # e.g. for "hello" our input would be "hell" and our target would be: "ello"
             inp_seq = line[:-1]
             tgt_seq = line[1:]
             all_examples.append((inp_seq, tgt_seq))
@@ -165,7 +219,7 @@ class MyModel:
         # TODO: Hyperparameter tuning to determine optimal epochs, batch_size, etc.
         self.model.train()
         num_epochs = 10
-        for epoch in range(num_epochs):
+        for epoch in tqdm(range(num_epochs)):
             random.shuffle(all_examples)
             total_loss = 0.0
             for inp_seq, tgt_seq in all_examples:
@@ -186,11 +240,10 @@ class MyModel:
                 optimizer.step()
 
                 total_loss += loss.item()
-
             avg_loss = total_loss / len(all_examples)
             print(f"[Epoch {epoch+1}/{num_epochs}] Loss: {avg_loss:.4f}")
 
-        # 4) Save model
+        # Save model
         self.save(work_dir)
 
     def run_pred(self, data):
