@@ -4,3 +4,4 @@ scikit-learn
 numpy
 urllib3
 datasets
+transformers

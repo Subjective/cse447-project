@@ -1,7 +1,7 @@
-FROM pytorch/pytorch:latest
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 RUN mkdir /job
 WORKDIR /job
 VOLUME ["/job/data", "/job/src", "/job/work", "/job/output"]
 
 # You should install any dependencies you need here.
-RUN pip install tqdm fasttext-wheel scikit-learn numpy urllib3
+RUN pip install tqdm fasttext-wheel scikit-learn numpy urllib3 transformers tqdm
